@@ -41,8 +41,8 @@ jobs:
   # ===========================================================================
   build-windows:
     name: Windows (x86-64)
-    needs: [lint, commit-message]
-    if: ${{ !failure() && !cancelled() }}
+    needs: []  # <-- Мы убрали жесткие требования, теперь сборка пойдет сразу
+    if: ${{ !cancelled() }}  # <-- Убрали проверку на неудачу предыдущих шагов
     uses: ./.github/workflows/Windows_x86.yml
 
   build-linux:
