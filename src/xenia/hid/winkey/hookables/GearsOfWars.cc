@@ -58,6 +58,10 @@ struct GameBuildAddrs {
   uint32_t fovscale_offset;
   uint16_t max_up;
   uint16_t max_down;
+  uint32_t gengine_address;  // static GEngine ptr; chain is language-independent
+  uint32_t chain_offset_1;
+  uint32_t chain_offset_2;
+  uint32_t chain_offset_3;
 };
 
 std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
@@ -72,11 +76,11 @@ std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU0,
      {0x834776EE, 0x47656172, kTitleIdGearsOfWars3, 0x833A480E, 0x83429A3E,
       0x43F6F340, 0x66, 0x62, 0x404E4054, NULL, NULL, NULL, 0x43F6F340, 0x3A8,
-      10000, 53535}},
+      10000, 53535, 0x834290BC, 0x4A0, 0x0, 0x40}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU6,
      {0x8348848A, 0x47656172, kTitleIdGearsOfWars3, 0x833B4FCE, 0x830042CF,
       0x42145D40, 0x66, 0x62, 0x40502254, NULL, NULL, NULL, 0x42145D40, 0x3A8,
-      10000, 53535}},
+      10000, 53535, 0x8343987C, 0x4A0, 0x0, 0x40}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU0,
      {0x8358ABEA, 0x47656172, kTitleIdGearsOfWarsJudgment, 0x83551871,
       0x83552939, 0x448F2840, 0x66, 0x62, 0x41DE7054, 0x448F2840, 0x6D4, 0x154,
