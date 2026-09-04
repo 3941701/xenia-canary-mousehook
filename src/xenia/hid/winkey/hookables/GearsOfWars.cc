@@ -180,7 +180,28 @@ bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
               supported_builds[game_build_].LookRightScale_live_address,
               supported_builds[game_build_].LookRightScale_live_offset_1,
               supported_builds[game_build_].LookRightScale_live_offset_2);
-
+          uint32_t GearsOfWarsGame::ResolvePointerChain(
+              uint32_t base_address, std::initializer_list<uint32_t> offsets) {
+            uint32_t addr = base_address;
+            for (uint32_t offset : offsets) {
+              if (addr < 0x40000000 || addr >= 0x90000000) return 0;
+              auto* ptr = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(addr);
+              if (!ptr) return 0;
+              uint32_t value = *ptr;
+              if (value < 0x40000000 || value >= 0x50000000) return 0;  // not ready yet
+              addr = value + offset;
+            }
+            return addr;
+          }
+          
+          uint32_t GearsOfWarsGame::GetCameraPointerAddress() {
+            const auto& b = supported_builds[game_build_];
+            if (b.gengine_address) {
+              return ResolvePointerChain(
+                  b.gengine_address, {b.chain_offset_1, b.chain_offset_2, b.chain_offset_3});
+            }
+            return b.camera_base_address;
+          }
           if (live_base_address) {
             xe::be<float>* LookRightScale_live =
                 kernel_memory()->TranslateVirtual<xe::be<float>*>(
