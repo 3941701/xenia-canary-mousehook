@@ -45,6 +45,9 @@ class GearsOfWarsGame : public HookableGame {
 
   uint32_t ResolveMultiPointer(uint32_t base_address, uint32_t offset_1,
                                uint32_t offset_2);
+  uint32_t ResolvePointerChain(uint32_t base_address,
+                               std::initializer_list<uint32_t> offsets);
+  uint32_t GetCameraPointerAddress();
 
   std::string ChooseBinds();
 
