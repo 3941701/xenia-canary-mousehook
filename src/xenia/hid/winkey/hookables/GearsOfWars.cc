@@ -9,6 +9,8 @@
 
 #define _USE_MATH_DEFINES
 
+#include <initializer_list>
+
 #include "xenia/hid/winkey/hookables/GearsOfWars.h"
 
 #include "xenia/base/chrono.h"
@@ -180,28 +182,6 @@ bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
               supported_builds[game_build_].LookRightScale_live_address,
               supported_builds[game_build_].LookRightScale_live_offset_1,
               supported_builds[game_build_].LookRightScale_live_offset_2);
-          uint32_t GearsOfWarsGame::ResolvePointerChain(
-              uint32_t base_address, std::initializer_list<uint32_t> offsets) {
-            uint32_t addr = base_address;
-            for (uint32_t offset : offsets) {
-              if (addr < 0x40000000 || addr >= 0x90000000) return 0;
-              auto* ptr = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(addr);
-              if (!ptr) return 0;
-              uint32_t value = *ptr;
-              if (value < 0x40000000 || value >= 0x50000000) return 0;  // not ready yet
-              addr = value + offset;
-            }
-            return addr;
-          }
-          
-          uint32_t GearsOfWarsGame::GetCameraPointerAddress() {
-            const auto& b = supported_builds[game_build_];
-            if (b.gengine_address) {
-              return ResolvePointerChain(
-                  b.gengine_address, {b.chain_offset_1, b.chain_offset_2, b.chain_offset_3});
-            }
-            return b.camera_base_address;
-          }
           if (live_base_address) {
             xe::be<float>* LookRightScale_live =
                 kernel_memory()->TranslateVirtual<xe::be<float>*>(
@@ -299,9 +279,12 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     xe::be<uint16_t>* degree_x;
     xe::be<uint16_t>* degree_y;
     // printf("Current Build: %d\n", static_cast<int>(game_build_));
+    uint32_t camera_ptr_address = GetCameraPointerAddress();
+    if (!camera_ptr_address) {
+      return false;
+    }
     uint32_t base_address =
-        *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
-            supported_builds[game_build_].camera_base_address);
+        *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(camera_ptr_address);
     // printf("BASE ADDRESS: 0x%08X\n", base_address);
     if (base_address && base_address >= 0x40000000 &&
         base_address < 0x50000000) {
@@ -345,10 +328,12 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
 }
 
 float GearsOfWarsGame::FOVScale() {
-  if (supported_builds[game_build_].fovscale_ptr_address) {
+  uint32_t fovscale_ptr = supported_builds[game_build_].gengine_address
+                              ? GetCameraPointerAddress()
+                              : supported_builds[game_build_].fovscale_ptr_address;
+  if (fovscale_ptr) {
     uint32_t fovscale_address =
-        *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
-            supported_builds[game_build_].fovscale_ptr_address);
+        *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(fovscale_ptr);
     if (fovscale_address && fovscale_address >= 0x40000000 &&
         fovscale_address < 0x50000000) {
       float fovscale = *kernel_memory()->TranslateVirtual<xe::be<float>*>(
@@ -394,6 +379,29 @@ void GearsOfWarsGame::ClampYAxis(uint16_t& value, uint16_t max_down,
       value = max_down;
     }
   }
+}
+
+uint32_t GearsOfWarsGame::ResolvePointerChain(
+    uint32_t base_address, std::initializer_list<uint32_t> offsets) {
+  uint32_t addr = base_address;
+  for (uint32_t offset : offsets) {
+    if (addr < 0x40000000 || addr >= 0x90000000) return 0;
+    auto* ptr = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(addr);
+    if (!ptr) return 0;
+    uint32_t value = *ptr;
+    if (value < 0x40000000 || value >= 0x50000000) return 0;  // not ready yet
+    addr = value + offset;
+  }
+  return addr;
+}
+
+uint32_t GearsOfWarsGame::GetCameraPointerAddress() {
+  const auto& b = supported_builds[game_build_];
+  if (b.gengine_address) {
+    return ResolvePointerChain(
+        b.gengine_address, {b.chain_offset_1, b.chain_offset_2, b.chain_offset_3});
+  }
+  return b.camera_base_address;
 }
 
 uint32_t GearsOfWarsGame::ResolveMultiPointer(uint32_t base_address,
