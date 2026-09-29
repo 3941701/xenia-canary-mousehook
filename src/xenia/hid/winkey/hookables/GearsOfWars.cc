@@ -24,7 +24,8 @@
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
 #include "xenia/cpu/xex_module.h"
-#include "src/xenia/kernel/util/xex2_info.h"
+#include "xenia/kernel/util/xex2_info.h"
+#include "xenia/kernel/user_module.h"
 
 using namespace xe::kernel;
 DECLARE_double(sensitivity);
