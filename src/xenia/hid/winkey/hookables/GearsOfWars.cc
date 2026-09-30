@@ -84,9 +84,14 @@ std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
       0x42145D40, 0x66, 0x62, 0x40502254, NULL, NULL, NULL, 0x42145D40, 0x3A8,
       10000, 53535, 0x8343987C, 0x4A0, 0x0, 0x40}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU0,
-     {0x8358ABEA, 0x47656172, kTitleIdGearsOfWarsJudgment, 0x83551871,
-      0x83552939, 0x448F2840, 0x66, 0x62, 0x41DE7054, 0x448F2840, 0x6D4, 0x154,
-      0x448F2840, 0x3AC, 10000, 53535}},
+     {0x8358ABEA, 0x47656172, kTitleIdGearsOfWarsJudgment,
+      0x83551871, 0x83552939,
+      NULL,                      // camera_base_address: теперь считается цепочкой
+      0x66, 0x62,
+      NULL, NULL, NULL, NULL,    // LookRightScale*: адреса кучи, на RU невалидны
+      NULL, 0x3AC,               // fovscale_ptr_address не нужен, берётся из цепочки
+      10000, 53535,
+      0x835349BC, 0x4A4, 0x0, 0x40}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU4,
      {0x8359C4AE, 0x47656172, kTitleIdGearsOfWarsJudgment, 0x8356C392,
       0x8356C392, 0x42943440, 0x66, 0x62, 0x41F2F754, 0x42943440, 0x6D4, 0x154,
