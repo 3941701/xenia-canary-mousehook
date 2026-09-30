@@ -184,58 +184,62 @@ end
 ---------------------------------------------------------------------------
 local static_by_val = {}
 
-local function findChainsFromSlot(A3)
-  local found_before = #chains
+-- Одним проходом сканирует кучу сразу для многих узких окон значений.
+-- Старый scanWindow перечитывал все 256 MiB кучи отдельно для каждого A1,
+-- что превращало 75 слотов * 40 A2 в тысячи полных проходов.
+local function scanManyWindows(windows, start, stop)
+  if #windows == 0 then return end
+  local buckets = {}
+  local bucket_size = 0x1000
+  for i = 1, #windows do
+    local w = windows[i]
+    w.hits = {}
+    local first_bucket = math.floor(w.wstart / bucket_size)
+    local last_bucket = math.floor((w.wend - 1) / bucket_size)
+    for bucket = first_bucket, last_bucket do
+      local list = buckets[bucket]
+      if not list then list = {} buckets[bucket] = list end
+      list[#list+1] = w
+    end
+  end
 
-  -- глубина 0: сам слот статический
+  local addr = start
+  while addr < stop do
+    local len = math.min(SCAN_CHUNK, stop - addr)
+    local b = readBytes(BASE + addr, len, true)
+    if b then
+      local n = #b
+      local i = 1
+      while i <= n - 3 do
+        local v = ((b[i]*256 + b[i+1])*256 + b[i+2])*256 + b[i+3]
+        if isHeap(v) then
+          local list = buckets[math.floor(v / bucket_size)]
+          if list then
+            local slot = addr + i - 1
+            for j = 1, #list do
+              local w = list[j]
+              if v >= w.wstart and v < w.wend then
+                w.hits[#w.hits+1] = {slot = slot, val = v}
+              end
+            end
+          end
+        end
+        i = i + 4
+      end
+    end
+    addr = addr + len
+    yield_ui()
+  end
+end
+
+local function addOneHopRoots(A3)
   if isStatic(A3) then addChain(A3, {}) end
-
-  -- глубина 1: статический слот содержит объект-владелец P3
   for p3 = A3 - O3_MAX, A3, 4 do
     local roots = static_by_val[p3]
     if roots then
       for i = 1, #roots do addChain(roots[i], {A3 - p3}) end
     end
   end
-
-  -- слоты A2, которые ведут на объект-владелец (окно [A3-O3_MAX, A3))
-  local a2list = scanWindow(A3 - O3_MAX, A3 + 4, HEAP_START, HEAP_STOP)
-  if #a2list > MAX_A2 then
-    print(string.format("  слотов A2: %d (разбираю первые %d)", #a2list, MAX_A2))
-  end
-  for ia = 1, math.min(#a2list, MAX_A2) do
-    local a2 = a2list[ia]
-    local p3 = a2.val
-    local o3 = A3 - p3
-
-    -- глубина 2: статический слот сразу содержит P2
-    for o2 = 0, O2_MAX - 4, 4 do
-      local p2 = a2.slot - o2
-      local roots = static_by_val[p2]
-      if roots then
-        for i = 1, #roots do addChain(roots[i], {o2, o3}) end
-      end
-    end
-
-    -- глубина 3: ищем слоты A1, ведущие на P2 (окно [A2-O2_MAX, A2))
-    local a1list = scanWindow(a2.slot - O2_MAX, a2.slot + 4, HEAP_START, HEAP_STOP)
-    for ib = 1, math.min(#a1list, MAX_A2) do
-      local a1 = a1list[ib]
-      local p2 = a1.val
-      -- A2 = P2 + o2  =>  o2 = A2 - P2
-      local o2 = a2.slot - p2
-      if o2 >= 0 and o2 < O2_MAX then
-        for o1 = 0, O1_MAX - 4, 4 do
-          local p1 = a1.slot - o1
-          local roots = static_by_val[p1]
-          if roots then
-            for i = 1, #roots do addChain(roots[i], {o1, o2, o3}) end
-          end
-        end
-      end
-    end
-  end
-  return #chains - found_before
 end
 
 ---------------------------------------------------------------------------
@@ -295,13 +299,83 @@ end)
 local slots_to_scan = math.min(#a3list, MAX_A3)
 print(string.format("разбираю до %d из %d слотов с камерой (CAM_SLOT первым)",
                     slots_to_scan, #a3list))
+
+-- Собираем однократные и двуххоповые варианты, а также окна для поиска A2.
+local a3windows = {}
 for i = 1, slots_to_scan do
   local a3 = a3list[i].slot
-  print(string.format("--- разбираю слот %08X (%d/%d) ---", a3, i, slots_to_scan))
-  local added = findChainsFromSlot(a3)
-  print(string.format("  новых уникальных цепочек: %d (всего %d)", added, #chains))
-  yield_ui()
+  print(string.format("подготовка слота %08X (%d/%d)", a3, i, slots_to_scan))
+  addOneHopRoots(a3)
+  a3windows[#a3windows+1] = {
+    a3 = a3, wstart = a3 - O3_MAX, wend = a3 + 4,
+  }
 end
+
+print("один проход по куче: ищу все слоты A2...")
+scanManyWindows(a3windows, HEAP_START, HEAP_STOP)
+
+-- Накапливаем окна A1 для всех A2 и сохраняем их владельцев/смещения.
+local a1windows = {}
+for i = 1, #a3windows do
+  local a3w = a3windows[i]
+  local a2list = a3w.hits
+  if #a2list > MAX_A2 then
+    print(string.format("  слот %08X: A2=%d, ограничиваю до %d",
+                        a3w.a3, #a2list, MAX_A2))
+  end
+  for ia = 1, math.min(#a2list, MAX_A2) do
+    local a2 = a2list[ia]
+    local item = {a3 = a3w.a3, slot = a2.slot, val = a2.val,
+                  o3 = a3w.a3 - a2.val}
+    item.window = {wstart = a2.slot - O2_MAX, wend = a2.slot + 4}
+    a1windows[#a1windows+1] = item.window
+    a2.owner = item
+  end
+  -- Keep the selected A2 records on the window for the assembly pass.
+  a3w.selected_a2 = {}
+  for ia = 1, math.min(#a2list, MAX_A2) do
+    a3w.selected_a2[ia] = a2list[ia]
+  end
+end
+
+print(string.format("один проход по куче: ищу A1 для %d окон...", #a1windows))
+scanManyWindows(a1windows, HEAP_START, HEAP_STOP)
+
+-- Сопоставляем найденные указатели A1/A2 со статическими roots.
+for i = 1, #a3windows do
+  local a3w = a3windows[i]
+  for ia = 1, #a3w.selected_a2 do
+    local a2 = a3w.selected_a2[ia]
+    local item = a2.owner
+    local o3 = item.o3
+
+    -- глубина 2: статический слот сразу содержит P2
+    for o2 = 0, O2_MAX - 4, 4 do
+      local p2 = a2.slot - o2
+      local roots = static_by_val[p2]
+      if roots then
+        for ir = 1, #roots do addChain(roots[ir], {o2, o3}) end
+      end
+    end
+
+    -- глубина 3: A1 хранит P2, а A2 = P2 + o2
+    for ib = 1, #item.window.hits do
+      local a1 = item.window.hits[ib]
+      local p2 = a1.val
+      local o2 = a2.slot - p2
+      if o2 >= 0 and o2 < O2_MAX then
+        for o1 = 0, O1_MAX - 4, 4 do
+          local p1 = a1.slot - o1
+          local roots = static_by_val[p1]
+          if roots then
+            for ir = 1, #roots do addChain(roots[ir], {o1, o2, o3}) end
+          end
+        end
+      end
+    end
+  end
+end
+print(string.format("сборка цепочек завершена; уникальных кандидатов: %d", #chains))
 
 -- Сначала roots в эвристическом диапазоне GEngine, затем альтернативные
 -- camera slots (не CAM_SLOT), короткие цепочки и маленькие смещения.
