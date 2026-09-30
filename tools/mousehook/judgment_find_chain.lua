@@ -106,6 +106,9 @@ local function resolveChain(root, offs)
   return a
 end
 
+-- Цепочек может быть тысячи: почти все - варианты одного и того же пути
+-- через одни и те же объекты. Оставляем по одной на уникальный путь.
+local seen_paths = {}
 local function addChain(root, offs)
   local key = string.format("%08X", root)
   for i = 1, #offs do key = key .. "_" .. string.format("%X", offs[i]) end
@@ -114,6 +117,18 @@ local function addChain(root, offs)
   local slot = resolveChain(root, offs)
   if not slot then return end
   if rd32(BASE + slot) ~= cam then return end
+  -- ключ пути: только объекты, без смещений
+  local path = ""
+  local a = root
+  for i = 1, #offs do
+    if offs[i] == NO_MORE then break end
+    local v = rd32(BASE + a)
+    if not v then return end
+    path = path .. string.format("%08X>", v)
+    a = v + offs[i]
+  end
+  if seen_paths[path] then return end
+  seen_paths[path] = true
   chains[#chains+1] = {root = root, offs = copyOffs(offs), slot = slot}
 end
 
@@ -260,12 +275,34 @@ print("ищу слоты с указателем на камеру в куче..
 local a3list = scanWindow(cam, cam + 4, HEAP_START, HEAP_STOP)
 print(string.format("найдено слотов с камерой: %d", #a3list))
 
+-- известный слот 0x448F2840 разбираем первым: цепочка до него самая
+-- "каноничная" (её же использует английская версия)
+table.sort(a3list, function(x, y)
+  if (x.slot == CAM_SLOT) ~= (y.slot == CAM_SLOT) then
+    return x.slot == CAM_SLOT
+  end
+  return x.slot < y.slot
+end)
+
 for i = 1, math.min(#a3list, MAX_A3) do
   local a3 = a3list[i].slot
   print(string.format("--- разбираю слот %08X (%d/%d) ---", a3, i, math.min(#a3list, MAX_A3)))
   findChainsFromSlot(a3)
-  if #chains > 0 then break end
+  if #chains > 0 then
+    print("  (достаточно, остальные слоты не разбираю)")
+    break
+  end
 end
+
+-- сортировка: короткие цепочки и маленькие смещения первыми
+table.sort(chains, function(a, b)
+  if #a.offs ~= #b.offs then return #a.offs < #b.offs end
+  local sa, sb = 0, 0
+  for i = 1, #a.offs do sa = sa + a.offs[i] end
+  for i = 1, #b.offs do sb = sb + b.offs[i] end
+  if sa ~= sb then return sa < sb end
+  return a.root < b.root
+end)
 
 print("")
 if #chains == 0 then
