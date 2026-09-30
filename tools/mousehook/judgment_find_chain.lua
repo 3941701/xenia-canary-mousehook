@@ -45,7 +45,7 @@ local O2_MAX = 0x400    -- ... 2-го уровня
 local O3_MAX = 0x400    -- ... 3-го уровня (от объекта до слота камеры)
 
 local SCAN_CHUNK = 0x100000
-local MAX_A3 = 20       -- сколько слотов с камерой разбирать
+local MAX_A3 = 100      -- до 100 слотов с камерой; в EN TU0 было около 75
 local MAX_A2 = 40       -- сколько слотов на уровень разбирать
 local MAX_PRINT = 40
 
@@ -122,10 +122,11 @@ local function addChain(root, offs)
   local slot = resolveChain(root, offs)
   if not slot then return end
   if rd32(BASE + slot) ~= cam then return end
-  -- Сохраняем отдельный вариант для каждого статического root: разные globals
-  -- могут указывать на один объект в EN, но вести в разные места на RU.
-  -- Внутри одного root схлопываем дубликаты по объектам, без смещений.
-  local path = string.format("root=%08X|", root)
+  -- Сохраняем отдельный вариант для каждого статического root и конечного
+  -- слота: разные globals/поля могут совпадать в EN, но различаться на RU.
+  -- Внутри одного root и одного конечного слота схлопываем дубликаты по
+  -- объектам, без смещений.
+  local path = string.format("root=%08X|slot=%08X|", root, slot)
   local a = root
   for i = 1, #offs do
     if offs[i] == NO_MORE then break end
@@ -291,22 +292,26 @@ table.sort(a3list, function(x, y)
   return x.slot < y.slot
 end)
 
-for i = 1, math.min(#a3list, MAX_A3) do
+local slots_to_scan = math.min(#a3list, MAX_A3)
+print(string.format("разбираю до %d из %d слотов с камерой (CAM_SLOT первым)",
+                    slots_to_scan, #a3list))
+for i = 1, slots_to_scan do
   local a3 = a3list[i].slot
-  print(string.format("--- разбираю слот %08X (%d/%d) ---", a3, i, math.min(#a3list, MAX_A3)))
-  findChainsFromSlot(a3)
-  if #chains > 0 then
-    print("  (достаточно, остальные слоты не разбираю)")
-    break
-  end
+  print(string.format("--- разбираю слот %08X (%d/%d) ---", a3, i, slots_to_scan))
+  local added = findChainsFromSlot(a3)
+  print(string.format("  новых уникальных цепочек: %d (всего %d)", added, #chains))
+  yield_ui()
 end
 
--- Сначала roots в эвристическом диапазоне GEngine (см. выше), затем короткие
--- цепочки и маленькие смещения. Это не отбрасывает остальные roots.
+-- Сначала roots в эвристическом диапазоне GEngine, затем альтернативные
+-- camera slots (не CAM_SLOT), короткие цепочки и маленькие смещения.
 table.sort(chains, function(a, b)
   local a_likely = a.root >= LIKELY_GENGINE_START and a.root < LIKELY_GENGINE_STOP
   local b_likely = b.root >= LIKELY_GENGINE_START and b.root < LIKELY_GENGINE_STOP
   if a_likely ~= b_likely then return a_likely end
+  local a_known_slot = a.slot == CAM_SLOT
+  local b_known_slot = b.slot == CAM_SLOT
+  if a_known_slot ~= b_known_slot then return not a_known_slot end
   if #a.offs ~= #b.offs then return #a.offs < #b.offs end
   local sa, sb = 0, 0
   for i = 1, #a.offs do sa = sa + a.offs[i] end
