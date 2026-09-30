@@ -62,6 +62,7 @@ class InputDriver {
  private:
   xe::ui::Window* window_;
   size_t window_z_order_;
+  std::function<bool()> is_active_callback_ = nullptr;
 };
 
 }  // namespace hid
