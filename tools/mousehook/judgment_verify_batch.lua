@@ -115,29 +115,45 @@ end
 
 print("")
 print(string.format("=== монитор углов %d сек ===", MONITOR_SECONDS))
-print("    пошевели мышью/правым стиком: углы меняются только у реальной камеры")
+print("    Сначала дождись строки СТАРТ. Затем 10–15 сек вращай камеру вправо,")
+print("    пока монитор работает. В конце будут счётчики изменений по каждому кандидату.")
 local start = getTickCount()
-local lastx, lasty = {}, {}
-local lines = {}
-for i = 1, #working do lastx[i] = -1 lasty[i] = -1 lines[i] = "" end
+local lastx, lasty, firstx, firsty = {}, {}, {}, {}
+local changesx, changesy = {}, {}
+local first_change_ms = {}
+for i = 1, #working do
+  local w = working[i]
+  lastx[i] = rd16(BASE + w.cam + 0x66)
+  lasty[i] = rd16(BASE + w.cam + 0x62)
+  firstx[i], firsty[i] = lastx[i], lasty[i]
+  changesx[i], changesy[i] = 0, 0
+  first_change_ms[i] = nil
+end
+print("    >>> СТАРТ: теперь вращай камеру вправо 10–15 секунд <<<")
 while getTickCount() - start < MONITOR_SECONDS * 1000 do
-  local changed = false
+  local now = getTickCount()
   for i = 1, #working do
     local w = working[i]
     local x = rd16(BASE + w.cam + 0x66)
     local y = rd16(BASE + w.cam + 0x62)
-    if x ~= lastx[i] or y ~= lasty[i] then
-      lastx[i] = x
-      lasty[i] = y
-      lines[i] = string.format("  #%-2d cam=%08X  X(+66) = %5d   Y(+62) = %5d",
-                               w.idx, w.cam, x or -1, y or -1)
-      changed = true
+    if x ~= nil and lastx[i] ~= nil and x ~= lastx[i] then
+      changesx[i] = changesx[i] + 1
+      first_change_ms[i] = first_change_ms[i] or (now - start)
     end
-  end
-  if changed then
-    for i = 1, #working do print(lines[i]) end
-    print("  ---")
+    if y ~= nil and lasty[i] ~= nil and y ~= lasty[i] then
+      changesy[i] = changesy[i] + 1
+      first_change_ms[i] = first_change_ms[i] or (now - start)
+    end
+    lastx[i], lasty[i] = x, y
   end
   sleep(50)
+end
+print("=== итог: сколько раз менялись углы (вращение вправо должно менять X) ===")
+for i = 1, #working do
+  local w = working[i]
+  print(string.format("  #%-2d cam=%08X  X: %5s -> %5s (%d изм.)  Y: %5s -> %5s (%d изм.)%s",
+      w.idx, w.cam, tostring(firstx[i]), tostring(lastx[i]), changesx[i],
+      tostring(firsty[i]), tostring(lasty[i]), changesy[i],
+      first_change_ms[i] and string.format("  первое изменение: %.1f сек", first_change_ms[i] / 1000) or "  БЕЗ ИЗМЕНЕНИЙ"))
 end
 print("-----")
