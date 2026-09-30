@@ -49,6 +49,11 @@ local MAX_A3 = 20       -- сколько слотов с камерой раз�
 local MAX_A2 = 40       -- сколько слотов на уровень разбирать
 local MAX_PRINT = 40
 
+-- В GoW3 найденный статический GEngine root лежал в этом диапазоне; это
+-- только эвристика для ранжирования Judgment-кандидатов, не жёсткий фильтр.
+local LIKELY_GENGINE_START = 0x83400000
+local LIKELY_GENGINE_STOP = 0x83480000
+
 local NO_MORE = 0xFFFFFFFF
 
 local cam = nil
@@ -117,8 +122,10 @@ local function addChain(root, offs)
   local slot = resolveChain(root, offs)
   if not slot then return end
   if rd32(BASE + slot) ~= cam then return end
-  -- ключ пути: только объекты, без смещений
-  local path = ""
+  -- Сохраняем отдельный вариант для каждого статического root: разные globals
+  -- могут указывать на один объект в EN, но вести в разные места на RU.
+  -- Внутри одного root схлопываем дубликаты по объектам, без смещений.
+  local path = string.format("root=%08X|", root)
   local a = root
   for i = 1, #offs do
     if offs[i] == NO_MORE then break end
@@ -294,8 +301,12 @@ for i = 1, math.min(#a3list, MAX_A3) do
   end
 end
 
--- сортировка: короткие цепочки и маленькие смещения первыми
+-- Сначала roots в эвристическом диапазоне GEngine (см. выше), затем короткие
+-- цепочки и маленькие смещения. Это не отбрасывает остальные roots.
 table.sort(chains, function(a, b)
+  local a_likely = a.root >= LIKELY_GENGINE_START and a.root < LIKELY_GENGINE_STOP
+  local b_likely = b.root >= LIKELY_GENGINE_START and b.root < LIKELY_GENGINE_STOP
+  if a_likely ~= b_likely then return a_likely end
   if #a.offs ~= #b.offs then return #a.offs < #b.offs end
   local sa, sb = 0, 0
   for i = 1, #a.offs do sa = sa + a.offs[i] end
