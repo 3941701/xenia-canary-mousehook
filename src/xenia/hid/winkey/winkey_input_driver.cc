@@ -79,6 +79,12 @@ DEFINE_bool(use_right_stick_workaround, true,
             "Always enabled for Saints Row 2.",
             "MouseHook");
 DEFINE_bool(
+    gears_debug, false,
+    "(Gears Of Wars) Prints build detection and camera pointer resolution "
+    "info to the log. Useful when hooking up non-English versions, where the "
+    "static camera addresses of the English build are not valid.",
+    "MouseHook");
+DEFINE_bool(
     disable_autoaim, true,
     "Disable autoaim in games that support it (currently GE,PD,SR and COD)",
     "MouseHook");

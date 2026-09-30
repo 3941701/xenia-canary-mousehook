@@ -33,6 +33,7 @@ DECLARE_double(right_stick_hold_time_workaround);
 DECLARE_int32(ue3_use_timer_to_hook_workaround);
 DECLARE_bool(use_right_stick_workaround);
 DECLARE_bool(use_right_stick_workaround_gears1and2);
+DECLARE_bool(gears_debug);
 
 const uint32_t kTitleIdGearsOfWars3 = 0x4D5308AB;
 const uint32_t kTitleIdGearsOfWars2 = 0x4D53082D;
@@ -86,11 +87,15 @@ std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU0,
      {0x8358ABEA, 0x47656172, kTitleIdGearsOfWarsJudgment, 0x83551871,
       0x83552939, 0x448F2840, 0x66, 0x62, 0x41DE7054, 0x448F2840, 0x6D4, 0x154,
-      0x448F2840, 0x3AC, 10000, 53535}},
+      0x448F2840, 0x3AC, 10000, 53535,
+      // No language independent chain yet: 0x448F2840 is a heap address that
+      // only holds the camera object on the English build. See
+      // tools/mousehook/README.md for how to find the GEngine chain.
+      NULL, NULL, NULL, NULL}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU4,
      {0x8359C4AE, 0x47656172, kTitleIdGearsOfWarsJudgment, 0x8356C392,
       0x8356C392, 0x42943440, 0x66, 0x62, 0x41F2F754, 0x42943440, 0x6D4, 0x154,
-      0x42943440, 0x3AC, 10000, 53535}},
+      0x42943440, 0x3AC, 10000, 53535, NULL, NULL, NULL, NULL}},
     {GearsOfWarsGame::GameBuild::GearsOfWars1_TU0,
      {0x82C20CFA, 0x47656172, kTitleIdGearsOfWars1, 0x82BBDD87, 0x82BD28A3,
       0x49EAC460, 0xDE, 0xDA, 0x40BF0164, NULL, NULL, NULL, 0x426AD3CC, 0x2D4,
@@ -106,6 +111,19 @@ std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
 
 GearsOfWarsGame::~GearsOfWarsGame() = default;
 static bool bypass_conditions = false;
+// Rate limiter for the --gears_debug prints, they would otherwise fire every
+// input poll.
+static bool gears_debug_throttled() {
+  static std::chrono::steady_clock::time_point last_print_time;
+  auto current_time = std::chrono::steady_clock::now();
+  auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(
+      current_time - last_print_time);
+  if (elapsed_time.count() < 2) {
+    return false;
+  }
+  last_print_time = current_time;
+  return true;
+}
 bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
   if (kernel_state()->title_id() != kTitleIdGearsOfWars3 &&
       kernel_state()->title_id() != kTitleIdGearsOfWars2 &&
@@ -133,6 +151,13 @@ bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
 
     if (*build_ptr == build.second.check_value) {
       game_build_ = build.first;
+      static bool logged_detected_build = false;
+      if (cvars::gears_debug && !logged_detected_build) {
+        logged_detected_build = true;
+        printf("[mousehook] Gears: detected build %d (check %08X == %08X)\n",
+               static_cast<int>(game_build_), build.second.check_addr,
+               build.second.check_value);
+      }
       static auto start_time = std::chrono::steady_clock::now();
       if ((cvars::ue3_use_timer_to_hook_workaround > 0) && !bypass_conditions) {
         if (!bypass_conditions) {
@@ -171,17 +196,55 @@ bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
                 supported_builds[game_build_].LookRightScale_address + 0x4);
 
         // Check if LookRightScale equals 0.1 (big-endian)
-        if (*LookRightScale != 0.05f) {
+        // Only touch it when it still holds a sane sensitivity value: on
+        // non-English versions the heap layout differs, so this address can
+        // point at unrelated memory and writing there would corrupt the game.
+        // Garbage (nan/inf/huge values) is skipped, 0 is still patched.
+        float current_look_right_scale = *LookRightScale;
+        if (current_look_right_scale != 0.05f &&
+            current_look_right_scale == current_look_right_scale &&
+            current_look_right_scale > -1000.f &&
+            current_look_right_scale < 1000.f) {
           // If it does not equal 0.1, set LookRightScale and LookUpScale to 0.1
           *LookRightScale = 0.05f;
           *LookUpScale = 0.05f;
         }
         if (bypass_conditions &&
             supported_builds[game_build_].LookRightScale_live_address) {
-          uint32_t live_base_address = ResolveMultiPointer(
-              supported_builds[game_build_].LookRightScale_live_address,
-              supported_builds[game_build_].LookRightScale_live_offset_1,
-              supported_builds[game_build_].LookRightScale_live_offset_2);
+          uint32_t live_base_address = 0;
+          if (supported_builds[game_build_].gengine_address) {
+            // Language independent path: LookRightScale_live_address is only
+            // valid on the English build, so resolve the camera object through
+            // the GEngine chain and continue from there instead. This mirrors
+            // ResolveMultiPointer(LookRightScale_live_address, offset_1,
+            // offset_2), which starts from the same camera object.
+            uint32_t camera_slot_address = GetCameraPointerAddress();
+            if (camera_slot_address) {
+              uint32_t camera_object =
+                  *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+                      camera_slot_address);
+              if (camera_object >= 0x40000000 &&
+                  camera_object < 0x50000000) {
+                uint32_t intermediate_address =
+                    *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+                        camera_object +
+                        supported_builds[game_build_]
+                            .LookRightScale_live_offset_1);
+                if (intermediate_address >= 0x40000000 &&
+                    intermediate_address < 0x80000000) {
+                  live_base_address =
+                      intermediate_address +
+                      supported_builds[game_build_]
+                          .LookRightScale_live_offset_2;
+                }
+              }
+            }
+          } else {
+            live_base_address = ResolveMultiPointer(
+                supported_builds[game_build_].LookRightScale_live_address,
+                supported_builds[game_build_].LookRightScale_live_offset_1,
+                supported_builds[game_build_].LookRightScale_live_offset_2);
+          }
           if (live_base_address) {
             xe::be<float>* LookRightScale_live =
                 kernel_memory()->TranslateVirtual<xe::be<float>*>(
@@ -281,6 +344,10 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     // printf("Current Build: %d\n", static_cast<int>(game_build_));
     uint32_t camera_ptr_address = GetCameraPointerAddress();
     if (!camera_ptr_address) {
+      if (cvars::gears_debug && gears_debug_throttled()) {
+        printf("[mousehook] Gears: camera pointer chain unresolved (build %d)\n",
+               static_cast<int>(game_build_));
+      }
       return false;
     }
     uint32_t base_address =
@@ -321,6 +388,12 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
       }
       *degree_y = degree_y_calc;
     } else {
+      if (cvars::gears_debug && gears_debug_throttled()) {
+        printf("[mousehook] Gears: camera slot %08X holds %08X, expected a "
+               "heap pointer (build %d)\n",
+               camera_ptr_address, base_address,
+               static_cast<int>(game_build_));
+      }
       return false;
     }
   }
@@ -385,6 +458,12 @@ uint32_t GearsOfWarsGame::ResolvePointerChain(
     uint32_t base_address, std::initializer_list<uint32_t> offsets) {
   uint32_t addr = base_address;
   for (uint32_t offset : offsets) {
+    // Sentinel that marks the end of a chain shorter than 3 hops, e.g. a
+    // build where the camera owner is reachable from a static address in one
+    // or two hops only.
+    if (offset == 0xFFFFFFFF) {
+      break;
+    }
     if (addr < 0x40000000 || addr >= 0x90000000) return 0;
     auto* ptr = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(addr);
     if (!ptr) return 0;
