@@ -23,9 +23,6 @@
 #include "xenia/kernel/xmodule.h"
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
-#include "xenia/cpu/xex_module.h"
-#include "xenia/kernel/util/xex2_info.h"
-#include "xenia/kernel/user_module.h"
 
 using namespace xe::kernel;
 DECLARE_double(sensitivity);
@@ -67,47 +64,45 @@ struct GameBuildAddrs {
   uint32_t chain_offset_1;
   uint32_t chain_offset_2;
   uint32_t chain_offset_3;
-  uint32_t xex_checksum;   // NEW: если не 0 — детект через checksum/timestamp XEX
-  uint32_t xex_timestamp;  // NEW
 };
 
 std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
     {GearsOfWarsGame::GameBuild::GearsOfWars2_TU6,
      {0x8317A198, 0x47656172, kTitleIdGearsOfWars2, 0x830F6DF6, 0x8317016B,
       0x40874800, 0x66, 0x62, 0x404E8840, NULL, NULL, NULL, 0x40874800, 0x390,
-      10000, 53530, 0, 0, 0, 0, 0, 0}},
+      10000, 53530}},
     {GearsOfWarsGame::GameBuild::GearsOfWars2_TU0,
      {0x831574EA, 0x47656172, kTitleIdGearsOfWars2, 0x83105B23, 0x8312384F,
       0x408211C0, 0x66, 0x62, 0x405294C0, NULL, NULL, NULL, 0x408211C0, 0x390,
-      10000, 53535, 0, 0, 0, 0, 0, 0}},
+      10000, 53535}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU0,
      {0x834776EE, 0x47656172, kTitleIdGearsOfWars3, 0x833A480E, 0x83429A3E,
       0x43F6F340, 0x66, 0x62, 0x404E4054, NULL, NULL, NULL, 0x43F6F340, 0x3A8,
-      10000, 53535, 0x834290BC, 0x4A0, 0x0, 0x40, 0, 0}},
+      10000, 53535, 0x834290BC, 0x4A0, 0x0, 0x40}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU6,
      {0x8348848A, 0x47656172, kTitleIdGearsOfWars3, 0x833B4FCE, 0x830042CF,
       0x42145D40, 0x66, 0x62, 0x40502254, NULL, NULL, NULL, 0x42145D40, 0x3A8,
-      10000, 53535, 0x8343987C, 0x4A0, 0x0, 0x40, 0, 0}},
+      10000, 53535, 0x8343987C, 0x4A0, 0x0, 0x40}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU0,
      {0x8358ABEA, 0x47656172, kTitleIdGearsOfWarsJudgment, 0x83551871,
       0x83552939, 0x448F2840, 0x66, 0x62, 0x41DE7054, 0x448F2840, 0x6D4, 0x154,
-      0x448F2840, 0x3AC, 10000, 53535, 0, 0, 0, 0, 0x0161C760, 0x51036520}},
+      0x448F2840, 0x3AC, 10000, 53535}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU4,
      {0x8359C4AE, 0x47656172, kTitleIdGearsOfWarsJudgment, 0x8356C392,
       0x8356C392, 0x42943440, 0x66, 0x62, 0x41F2F754, 0x42943440, 0x6D4, 0x154,
-      0x42943440, 0x3AC, 10000, 53535, 0, 0, 0, 0, 0, 0}},
+      0x42943440, 0x3AC, 10000, 53535}},
     {GearsOfWarsGame::GameBuild::GearsOfWars1_TU0,
      {0x82C20CFA, 0x47656172, kTitleIdGearsOfWars1, 0x82BBDD87, 0x82BD28A3,
       0x49EAC460, 0xDE, 0xDA, 0x40BF0164, NULL, NULL, NULL, 0x426AD3CC, 0x2D4,
-      10000, 53535, 0, 0, 0, 0, 0, 0}},
+      10000, 53535}},
     {GearsOfWarsGame::GameBuild::GearsOfWars1_TU5,
      {0x8300235A, 0x47656172, kTitleIdGearsOfWars1, 0x82F9E99B, 0x82FDB677,
       0x4A1CBA60, 0xDE, 0xDA, 0x40BF9814, NULL, NULL, NULL, 0x42961700, 0x2D4,
-      10000, 53535, 0, 0, 0, 0, 0, 0}},
+      10000, 53535}},
     {GearsOfWarsGame::GameBuild::Section8_TU0,
      {0x8323DCCF, 0x656E6769, kTitleIdSection8, 0x8326F1AF, 0x8326F1B3,
       0x42231700, 0x66, 0x62, NULL, NULL, NULL, NULL, 0x42231700, 0x470, 16383,
-      49152, 0, 0, 0, 0, 0, 0}}};
+      49152}}};
 
 GearsOfWarsGame::~GearsOfWarsGame() = default;
 static bool bypass_conditions = false;
@@ -123,41 +118,20 @@ bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
   const std::string current_version =
       kernel_state()->emulator()->title_version();
 
-  uint32_t module_checksum = 0;
-  uint32_t module_timestamp = 0;
-  {
-    auto exec_module = kernel_state()->GetExecutableModule();
-    if (exec_module) {
-      xex2_opt_checksum_timedatestamp* checksum_ts = nullptr;
-      if (exec_module->xex_module()->GetOptHeader(
-              XEX_HEADER_CHECKSUM_TIMESTAMP, &checksum_ts) &&
-          checksum_ts) {
-        module_checksum = checksum_ts->checksum;
-        module_timestamp = checksum_ts->timedatestamp;
-      }
-    }
-  }
-
   for (auto& build : supported_builds) {
-    if (build.second.title_id != title_id) {
+    if (build.second.title_id != title_id) {  // Required check otherwise GOW1
+                                              // crashes due to invalid address
       continue;
     }
 
-    bool matched = false;
+    auto* build_ptr = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+        build.second.check_addr);
 
-    if (build.second.xex_checksum != 0) {
-      matched = (module_checksum == build.second.xex_checksum &&
-                 module_timestamp == build.second.xex_timestamp);
-    } else {
-      auto* build_ptr = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
-          build.second.check_addr);
-      if (build_ptr == nullptr) {
-        continue;
-      }
-      matched = (*build_ptr == build.second.check_value);
+    if (build_ptr == nullptr) {
+      continue;
     }
 
-    if (matched) {
+    if (*build_ptr == build.second.check_value) {
       game_build_ = build.first;
       static auto start_time = std::chrono::steady_clock::now();
       if ((cvars::ue3_use_timer_to_hook_workaround > 0) && !bypass_conditions) {
@@ -196,7 +170,9 @@ bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
             kernel_memory()->TranslateVirtual<xe::be<float>*>(
                 supported_builds[game_build_].LookRightScale_address + 0x4);
 
+        // Check if LookRightScale equals 0.1 (big-endian)
         if (*LookRightScale != 0.05f) {
+          // If it does not equal 0.1, set LookRightScale and LookUpScale to 0.1
           *LookRightScale = 0.05f;
           *LookUpScale = 0.05f;
         }
