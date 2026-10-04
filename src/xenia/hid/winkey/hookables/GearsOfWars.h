@@ -61,8 +61,8 @@ class GearsOfWarsGame : public HookableGame {
   void MidHookInit();
 
  private:
-  bool look_scale_applied_ = false;  // live-масштаб стика понижен в этом цикле
   GameBuild game_build_ = GameBuild::Unknown;
+  bool look_scale_applied_ = false;  // live-масштаб стика понижен в этом цикле
   // Timer variables to hold the state for a while // this is probably not ideal
   // -Clippy95
   std::chrono::steady_clock::time_point last_movement_time_x_;
