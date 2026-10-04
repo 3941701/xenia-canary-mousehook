@@ -86,12 +86,10 @@ std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU0,
      {0x8358ABEA, 0x47656172, kTitleIdGearsOfWarsJudgment,
       0x83551871, 0x83552939,
-      NULL,                      // camera_base_address: цепочка
+      NULL,                      // camera_base_address: теперь считается цепочкой
       0x66, 0x62,
-      NULL,                      // LookRightScale_address: статика мертва
-      NULL,                      // LookRightScale_live_address: считается от цепочки
-      0x6D4, 0x154,             // controller+0x6D4 -> PlayerInput, +0x154 = LookRightScale
-      NULL, 0x3AC,
+      NULL, NULL, 0x6D4, 0x154,
+      NULL, 0x3AC,               // fovscale_ptr_address не нужен, берётся из цепочки
       10000, 53535,
       0x835349BC, 0x4A4, 0x0, 0x40}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU4,
@@ -124,6 +122,9 @@ static bool RightStickWorkaroundEnabled(uint32_t title_id,
           (title_id == kTitleIdGearsOfWars3 ||
            title_id == kTitleIdGearsOfWarsJudgment));
 }
+
+// File-local state: the live scale may be valid even when the static address is not.
+static bool look_scale_applied_ = false;
 
 GearsOfWarsGame::~GearsOfWarsGame() = default;
 static bool bypass_conditions = false;
@@ -176,15 +177,26 @@ bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
           bypass_conditions = true;
         }
       }
-      
       look_scale_applied_ = false;
       const GameBuildAddrs& cur = supported_builds[game_build_];
       if (bypass_conditions && RightStickWorkaroundEnabled(title_id, cur)) {
         if (cur.LookRightScale_address) {
-          // --- статическая часть: оставить КАК БЫЛО (LookRightScale /
-          // LookUpScale = 0.05f по LookRightScale_address и +0x4) ---
+          xe::be<float>* LookRightScale =
+              kernel_memory()->TranslateVirtual<xe::be<float>*>(
+                  cur.LookRightScale_address);
+          xe::be<float>* LookUpScale =
+              kernel_memory()->TranslateVirtual<xe::be<float>*>(
+                  cur.LookRightScale_address + 0x4);
+
+          // Check if LookRightScale equals 0.1 (big-endian)
+          if (*LookRightScale != 0.05f) {
+            // If it does not equal 0.1, set LookRightScale and LookUpScale to 0.1
+            *LookRightScale = 0.05f;
+            *LookUpScale = 0.05f;
+          }
         }
-        // live-часть, теперь вне условия на статический адрес
+
+        // Live-часть, теперь вне условия на статический адрес.
         uint32_t live_ptr = cur.LookRightScale_live_address;
         if (!live_ptr && cur.gengine_address &&
             cur.LookRightScale_live_offset_1) {
@@ -202,36 +214,6 @@ bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
             if (right && *right != 0.05f) *right = 0.05f;
             if (up && *up != 0.05f) *up = 0.05f;
             look_scale_applied_ = true;
-          }
-        }
-      }
-
-        // Check if LookRightScale equals 0.1 (big-endian)
-        if (*LookRightScale != 0.05f) {
-          // If it does not equal 0.1, set LookRightScale and LookUpScale to 0.1
-          *LookRightScale = 0.05f;
-          *LookUpScale = 0.05f;
-        }
-        if (bypass_conditions &&
-            supported_builds[game_build_].LookRightScale_live_address) {
-          uint32_t live_base_address = ResolveMultiPointer(
-              supported_builds[game_build_].LookRightScale_live_address,
-              supported_builds[game_build_].LookRightScale_live_offset_1,
-              supported_builds[game_build_].LookRightScale_live_offset_2);
-          if (live_base_address) {
-            xe::be<float>* LookRightScale_live =
-                kernel_memory()->TranslateVirtual<xe::be<float>*>(
-                    live_base_address);
-            xe::be<float>* LookUpScale_live =
-                kernel_memory()->TranslateVirtual<xe::be<float>*>(
-                    live_base_address + 0x4);
-
-            if (LookRightScale_live && *LookRightScale_live != 0.05f) {
-              *LookRightScale_live = 0.05f;
-            }
-            if (LookUpScale_live && *LookUpScale_live != 0.05f) {
-              *LookUpScale_live = 0.05f;
-            }
           }
         }
       }
