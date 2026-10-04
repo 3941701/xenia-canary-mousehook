@@ -86,10 +86,12 @@ std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU0,
      {0x8358ABEA, 0x47656172, kTitleIdGearsOfWarsJudgment,
       0x83551871, 0x83552939,
-      NULL,                      // camera_base_address: теперь считается цепочкой
+      NULL,                      // camera_base_address: цепочка
       0x66, 0x62,
-      NULL, NULL, NULL, NULL,    // LookRightScale*: адреса кучи, на RU невалидны
-      NULL, 0x3AC,               // fovscale_ptr_address не нужен, берётся из цепочки
+      NULL,                      // LookRightScale_address: статика мертва
+      NULL,                      // LookRightScale_live_address: считается от цепочки
+      0x6D4, 0x154,             // controller+0x6D4 -> PlayerInput, +0x154 = LookRightScale
+      NULL, 0x3AC,
       10000, 53535,
       0x835349BC, 0x4A4, 0x0, 0x40}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU4,
@@ -108,6 +110,20 @@ std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
      {0x8323DCCF, 0x656E6769, kTitleIdSection8, 0x8326F1AF, 0x8326F1B3,
       0x42231700, 0x66, 0x62, NULL, NULL, NULL, NULL, 0x42231700, 0x470, 16383,
       49152}}};
+
+static bool RightStickWorkaroundEnabled(uint32_t title_id,
+                                        const GameBuildAddrs& b) {
+  const bool has_scale =
+      b.LookRightScale_address ||
+      (b.gengine_address && b.LookRightScale_live_offset_1);
+  if (!has_scale) return false;
+  return (cvars::use_right_stick_workaround_gears1and2 &&
+          (title_id == kTitleIdGearsOfWars1 ||
+           title_id == kTitleIdGearsOfWars2)) ||
+         (cvars::use_right_stick_workaround &&
+          (title_id == kTitleIdGearsOfWars3 ||
+           title_id == kTitleIdGearsOfWarsJudgment));
+}
 
 GearsOfWarsGame::~GearsOfWarsGame() = default;
 static bool bypass_conditions = false;
@@ -160,20 +176,35 @@ bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
           bypass_conditions = true;
         }
       }
-      if (bypass_conditions &&
-          supported_builds[game_build_].LookRightScale_address &&
-          ((cvars::use_right_stick_workaround_gears1and2 &&
-            (title_id == kTitleIdGearsOfWars1 ||
-             title_id == kTitleIdGearsOfWars2)) ||
-           (cvars::use_right_stick_workaround &&
-            (title_id == kTitleIdGearsOfWars3 ||
-             title_id == kTitleIdGearsOfWarsJudgment)))) {
-        xe::be<float>* LookRightScale =
-            kernel_memory()->TranslateVirtual<xe::be<float>*>(
-                supported_builds[game_build_].LookRightScale_address);
-        xe::be<float>* LookUpScale =
-            kernel_memory()->TranslateVirtual<xe::be<float>*>(
-                supported_builds[game_build_].LookRightScale_address + 0x4);
+      
+      look_scale_applied_ = false;
+      const GameBuildAddrs& cur = supported_builds[game_build_];
+      if (bypass_conditions && RightStickWorkaroundEnabled(title_id, cur)) {
+        if (cur.LookRightScale_address) {
+          // --- статическая часть: оставить КАК БЫЛО (LookRightScale /
+          // LookUpScale = 0.05f по LookRightScale_address и +0x4) ---
+        }
+        // live-часть, теперь вне условия на статический адрес
+        uint32_t live_ptr = cur.LookRightScale_live_address;
+        if (!live_ptr && cur.gengine_address &&
+            cur.LookRightScale_live_offset_1) {
+          live_ptr = GetCameraPointerAddress();  // адрес поля LP+0x40
+        }
+        if (live_ptr) {
+          uint32_t live_base_address = ResolveMultiPointer(
+              live_ptr, cur.LookRightScale_live_offset_1,
+              cur.LookRightScale_live_offset_2);
+          if (live_base_address) {
+            auto* right = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+                live_base_address);
+            auto* up = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+                live_base_address + 0x4);
+            if (right && *right != 0.05f) *right = 0.05f;
+            if (up && *up != 0.05f) *up = 0.05f;
+            look_scale_applied_ = true;
+          }
+        }
+      }
 
         // Check if LookRightScale equals 0.1 (big-endian)
         if (*LookRightScale != 0.05f) {
@@ -219,13 +250,9 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
   }
 
   uint32_t title_id = kernel_state()->title_id();
-  if (supported_builds[game_build_].LookRightScale_address &&
-      ((cvars::use_right_stick_workaround_gears1and2 &&
-        (title_id == kTitleIdGearsOfWars1 ||
-         title_id == kTitleIdGearsOfWars2)) ||
-       (cvars::use_right_stick_workaround &&
-        (title_id == kTitleIdGearsOfWars3 ||
-         title_id == kTitleIdGearsOfWarsJudgment)))) {
+  const GameBuildAddrs& cur = supported_builds[game_build_];
+  if (RightStickWorkaroundEnabled(title_id, cur) &&
+      (cur.LookRightScale_address || look_scale_applied_)) {
     auto now = std::chrono::steady_clock::now();
     auto elapsed_x = std::chrono::duration_cast<std::chrono::milliseconds>(
                          now - last_movement_time_x_)
